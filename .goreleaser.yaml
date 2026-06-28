@@ -48,6 +48,22 @@ changelog:
       - "^test:"
       - "^chore:"
 
+brews:
+  - name: taskmem
+    repository:
+      owner: shajith-dev
+      name: homebrew-tap
+      branch: main
+      token: "{{ .Env.HOMEBREW_TAP_GITHUB_TOKEN }}"
+    homepage: "https://github.com/shajith-dev/taskmem"
+    description: "Task-tracking CLI for LLM agents, backed by PostgreSQL"
+    license: "Apache-2.0"
+    commit_author:
+      name: goreleaser-bot
+      email: bot@goreleaser.com
+    test: |
+      system "#{bin}/taskmem version"
+
 release:
   github:
     owner: shajith-dev

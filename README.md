@@ -9,7 +9,12 @@ Codex, etc.) via its `--json` output mode, but it's perfectly usable by humans t
 
 ## Install
 
-**macOS / Linux:**
+**macOS / Linux (Homebrew):**
+```bash
+brew install shajith-dev/tap/taskmem
+```
+
+**macOS / Linux (script):**
 ```bash
 curl -fsSL https://raw.githubusercontent.com/shajith-dev/taskmem/main/scripts/install.sh | sh
 ```

@@ -22,8 +22,10 @@ var rootCmd = &cobra.Command{
 	SilenceUsage: true,
 	SilenceErrors: true,
 	PersistentPreRunE: func(cmd *cobra.Command, args []string) error {
-		// Skip DB init for the migrate command — it manages its own connection.
-		if cmd.Name() == "migrate" {
+		// These commands don't touch the database, so don't require a connection.
+		// (migrate manages its own connection.)
+		switch cmd.Name() {
+		case "migrate", "version", "help", "completion":
 			return nil
 		}
 		a, err := app.New(context.Background())
