@@ -46,4 +46,5 @@ if ($userPath -notlike "*$installDir*") {
 
 Write-Host ""
 Write-Host "Installed $binary $version to $installDir\$binary.exe"
-Write-Host "Next: set DATABASE_URL, then run '$binary migrate'."
+Write-Host "Ready to use — just run '$binary task create ""my first task""'."
+Write-Host "(An embedded SQLite database is created automatically on first use.)"

@@ -2,7 +2,8 @@
 
 A command-line tool for **LLM agents to track their own work** — tasks, status,
 dependencies, per-task scratchpad (working memory), and the code files in each
-task's context. State lives in PostgreSQL.
+task's context. State lives in an embedded **SQLite** database — no server, no
+setup.
 
 `taskmem` is a thin, fast CLI designed to be driven by an agent (Claude, Cursor,
 Codex, etc.) via its `--json` output mode, but it's perfectly usable by humans too.
@@ -32,52 +33,49 @@ Go users can also:
 go install github.com/shajith-dev/taskmem@latest
 ```
 
-After installing, point it at a database and set up the schema:
+That's it — no database to install or configure. On first run, `taskmem`
+creates its SQLite database and applies the schema automatically:
+
 ```bash
-export DATABASE_URL="postgres://user:password@host:5432/dbname?sslmode=disable"
-taskmem migrate
+taskmem task create "Implement auth module"
 ```
 
-> The CLI is a **client only** — it does not bundle a database. You need a
-> reachable PostgreSQL (your own, a managed one, or the bundled docker-compose
-> for local dev).
+The database lives under your user config directory by default:
+
+| OS | Default location |
+|---|---|
+| Windows | `%AppData%\taskmem\taskmem.db` |
+| Linux | `~/.config/taskmem/taskmem.db` |
+| macOS | `~/Library/Application Support/taskmem/taskmem.db` |
+
+Set `DATABASE_URL` to a file path to override it (e.g. `DATABASE_URL=./taskmem.db`
+for a per-project database).
 
 ## Build from source
 
-Requirements: **Go 1.25+** and **Docker or an existing PostgreSQL**.
-
-**Fastest — one command** (builds, starts the DB, migrates):
-
-```bash
-./scripts/setup.sh        # macOS / Linux
-./scripts/setup.ps1       # Windows (PowerShell)
-```
-
-The CLI is then at `bin/taskmem`. To point at your own PostgreSQL instead of the
-bundled Docker one, set `DATABASE_URL` before running the script and it skips Docker.
-
-**Or step by step:**
+Requirements: **Go 1.25+** only — SQLite is embedded via the pure-Go
+`modernc.org/sqlite` driver, so there's no C toolchain or external database.
 
 ```bash
-# 1. Start a local PostgreSQL (optional — or point at any Postgres)
-docker compose up -d                 # exposes Postgres on host port 65432
+go build -o bin/taskmem .
 
-# 2. Configure the connection
-cp .env.example .env                 # edit DATABASE_URL if needed
-
-# 3. Apply the schema
-go run . migrate
-
-# 4. Use it
-go run . task create "Implement auth module"
-go run . --json task list
+# Use it (migrations run automatically on first use)
+bin/taskmem task create "Implement auth module"
+bin/taskmem --json task list
 ```
 
-`DATABASE_URL` is read from `.env` (or the environment):
+## Testing
 
+The test suite runs against a real (temporary) SQLite database, so it exercises
+the actual SQL and migrations:
+
+```bash
+go test ./...
 ```
-DATABASE_URL=postgres://taskmem:taskmem@localhost:65432/taskmem?sslmode=disable
-```
+
+No setup required — each test gets an isolated temp database that's cleaned up
+automatically. CI runs `go vet`, `go build`, and `go test -race` on every push
+and pull request.
 
 ## Usage
 
@@ -87,15 +85,16 @@ taskmem [--json] <command> ...
 
 | Command | Description |
 |---|---|
-| `migrate` | Apply database migrations |
+| `migrate` | Apply database migrations (runs automatically on startup; rarely needed) |
 | `task create <desc>` | Create a task (`--parent`, `--model`, `--subagent`) |
 | `task create-bulk ...` | Create many tasks at once (args or `--file`) |
 | `task get <id>` | Show a task |
 | `task list` | List tasks (`--parent <id>` for children) |
 | `task status <id> <status>` | Update status |
+| `task update <id> ...` | Update fields (`--description`, `--status`, `--model`, `--parent`/`--no-parent`, `--subagent`) |
 | `task delete <id>` | Delete a task (cascades) |
 | `task scratchpad get/set/append <id> [text]` | Read/write a task's working memory |
-| `task dep add/remove/list ...` | Manage dependencies |
+| `task dep add/remove/list/dependents ...` | Manage dependencies |
 | `file attach/attach-bulk/detach/list ...` | Manage files in a task's context |
 
 Statuses: `PENDING`, `IN_PROGRESS`, `COMPLETED`, `PARTIALLY_COMPLETED`.
@@ -135,11 +134,12 @@ git push origin v0.1.0
 ```
 cmd/            cobra commands (root, task, file, migrate, version)
 internal/
-  app/          dependency wiring (config + pool + services)
+  app/          dependency wiring (config + db + services)
   config/       env/config loading
-  db/           pgx repositories + migration runner
+  db/           SQLite repositories + migration runner
   models/       domain types
   service/      business logic
+  testutil/     shared test helpers (temp migrated SQLite DB)
 migrations/     goose SQL migrations (embedded into the binary)
 scripts/        setup + install scripts
 docs/GUIDE.md   agent usage guide

@@ -28,7 +28,7 @@ var rootCmd = &cobra.Command{
 		case "migrate", "version", "help", "completion":
 			return nil
 		}
-		a, err := app.New(context.Background())
+		a, err := app.New(context.Background(), migrationsFS)
 		if err != nil {
 			return fmt.Errorf("init app: %w", err)
 		}

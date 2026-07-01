@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
-# setup.sh — build taskmem, start the database, and apply migrations.
+# setup.sh — build taskmem. The database is embedded SQLite and is created
+# automatically on first use, so there is nothing else to set up.
 # Usage (from anywhere):  ./scripts/setup.sh
 set -euo pipefail
 
@@ -14,24 +15,8 @@ echo "==> Building taskmem..."
 mkdir -p bin
 go build -o bin/taskmem .
 
-echo "==> Ensuring .env..."
-if [ ! -f .env ]; then
-    cp .env.example .env
-    echo "    created .env from .env.example"
-fi
-
-if [ -n "${DATABASE_URL:-}" ]; then
-    echo "==> Using DATABASE_URL from the environment (skipping Docker)."
-elif command -v docker >/dev/null 2>&1; then
-    echo "==> Starting PostgreSQL via docker compose..."
-    docker compose up -d --wait
-else
-    echo "==> Docker not found; assuming .env points to an existing PostgreSQL."
-fi
-
-echo "==> Applying migrations..."
-./bin/taskmem migrate
-
 echo
 echo "Done. The CLI is at: $root/bin/taskmem"
-echo "Try:  ./bin/taskmem --json task list"
+echo "The SQLite database is created automatically on first use."
+echo "Try:  ./bin/taskmem task create \"my first task\""
+echo "      ./bin/taskmem --json task list"

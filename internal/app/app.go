@@ -2,46 +2,57 @@ package app
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
+	"io/fs"
+	"os"
+	"path/filepath"
 
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shajith-dev/taskmem/internal/config"
 	"github.com/shajith-dev/taskmem/internal/db"
 	"github.com/shajith-dev/taskmem/internal/service"
 )
 
 type App struct {
-	Pool     *pgxpool.Pool
-	Tasks    *service.TaskService
-	Files    *service.FileService
+	DB    *sql.DB
+	Tasks *service.TaskService
+	Files *service.FileService
 }
 
-func New(ctx context.Context) (*App, error) {
+// New loads config, opens the SQLite database (creating its parent directory if
+// needed), applies any pending migrations, and wires up the services. Callers
+// never have to run migrations or configure a database manually.
+func New(ctx context.Context, migrationsFS fs.FS) (*App, error) {
 	cfg, err := config.Load()
 	if err != nil {
 		return nil, fmt.Errorf("load config: %w", err)
 	}
 
-	if cfg.DatabaseURL == "" {
-		return nil, fmt.Errorf("DATABASE_URL is not set")
+	if err := os.MkdirAll(filepath.Dir(cfg.DatabaseURL), 0o755); err != nil {
+		return nil, fmt.Errorf("create data directory: %w", err)
 	}
 
-	pool, err := db.NewPool(ctx, cfg.DatabaseURL)
+	sqlDB, err := db.NewDB(ctx, cfg.DatabaseURL)
 	if err != nil {
 		return nil, err
 	}
 
-	taskRepo      := db.NewTaskRepo(pool)
-	taskGraphRepo := db.NewTaskGraphRepo(pool)
-	fileRepo      := db.NewFileRepo(pool)
+	if err := db.MigrateDB(ctx, sqlDB, migrationsFS, "migrations"); err != nil {
+		sqlDB.Close()
+		return nil, err
+	}
+
+	taskRepo := db.NewTaskRepo(sqlDB)
+	taskGraphRepo := db.NewTaskGraphRepo(sqlDB)
+	fileRepo := db.NewFileRepo(sqlDB)
 
 	return &App{
-		Pool:  pool,
+		DB:    sqlDB,
 		Tasks: service.NewTaskService(taskRepo, taskGraphRepo),
 		Files: service.NewFileService(fileRepo),
 	}, nil
 }
 
 func (a *App) Close() {
-	a.Pool.Close()
+	a.DB.Close()
 }

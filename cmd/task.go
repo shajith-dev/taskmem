@@ -197,6 +197,74 @@ var taskStatusCmd = &cobra.Command{
 	},
 }
 
+// ── update ────────────────────────────────────────────────────────────────────
+
+var (
+	updateParent      int64
+	updateNoParent    bool
+	updateStatus      string
+	updateDescription string
+	updateModel       string
+	updateSubagent    bool
+)
+
+var taskUpdateCmd = &cobra.Command{
+	Use:   "update <id>",
+	Short: "Update fields of a task (only the flags you pass are changed)",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		id, err := strconv.ParseInt(args[0], 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid id: %w", err)
+		}
+
+		if cmd.Flags().Changed("parent") && cmd.Flags().Changed("no-parent") {
+			return fmt.Errorf("--parent and --no-parent are mutually exclusive")
+		}
+
+		// Load the current task, then override only the flags the user set.
+		t, err := currentApp.Tasks.Get(context.Background(), id)
+		if err != nil {
+			return err
+		}
+
+		if cmd.Flags().Changed("description") {
+			t.Description = updateDescription
+		}
+		if cmd.Flags().Changed("model") {
+			t.Model = updateModel
+		}
+		if cmd.Flags().Changed("subagent") {
+			t.UseSubagent = updateSubagent
+		}
+		if cmd.Flags().Changed("status") {
+			status := models.TaskStatus(updateStatus)
+			if !status.Valid() {
+				return fmt.Errorf("invalid status %q", updateStatus)
+			}
+			t.Status = status
+		}
+		if cmd.Flags().Changed("parent") {
+			p := updateParent
+			t.Parent = &p
+		}
+		if cmd.Flags().Changed("no-parent") {
+			t.Parent = nil
+		}
+
+		updated, err := currentApp.Tasks.Update(context.Background(), t)
+		if err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			return printJSON(updated)
+		}
+		printTask(updated)
+		return nil
+	},
+}
+
 // ── delete ────────────────────────────────────────────────────────────────────
 
 var taskDeleteCmd = &cobra.Command{
@@ -297,6 +365,39 @@ var depListCmd = &cobra.Command{
 		}
 		if len(deps) == 0 {
 			fmt.Println("No dependencies.")
+			return nil
+		}
+
+		for _, d := range deps {
+			fmt.Printf("task %d depends on task %d\n", d.TaskID, d.DependsOn)
+		}
+		return nil
+	},
+}
+
+var depDependentsCmd = &cobra.Command{
+	Use:   "dependents <task-id>",
+	Short: "List tasks that depend on this task",
+	Args:  cobra.ExactArgs(1),
+	RunE: func(cmd *cobra.Command, args []string) error {
+		taskID, err := strconv.ParseInt(args[0], 10, 64)
+		if err != nil {
+			return fmt.Errorf("invalid task-id: %w", err)
+		}
+
+		deps, err := currentApp.Tasks.GetDependents(context.Background(), taskID)
+		if err != nil {
+			return err
+		}
+
+		if jsonOutput {
+			if deps == nil {
+				deps = []*models.TaskGraph{}
+			}
+			return printJSON(deps)
+		}
+		if len(deps) == 0 {
+			fmt.Println("No dependents.")
 			return nil
 		}
 
@@ -418,9 +519,17 @@ func init() {
 	// task list flags
 	taskListCmd.Flags().Int64Var(&listParent, "parent", 0, "Filter by parent task ID")
 
+	// task update flags
+	taskUpdateCmd.Flags().StringVar(&updateDescription, "description", "", "New description")
+	taskUpdateCmd.Flags().StringVar(&updateStatus, "status", "", "New status (PENDING|IN_PROGRESS|COMPLETED|PARTIALLY_COMPLETED)")
+	taskUpdateCmd.Flags().StringVar(&updateModel, "model", "", "New model")
+	taskUpdateCmd.Flags().Int64Var(&updateParent, "parent", 0, "New parent task ID")
+	taskUpdateCmd.Flags().BoolVar(&updateNoParent, "no-parent", false, "Clear the parent (make it a root task)")
+	taskUpdateCmd.Flags().BoolVar(&updateSubagent, "subagent", false, "Set the use-subagent flag")
+
 	// wire subcommands
-	depCmd.AddCommand(depAddCmd, depRemoveCmd, depListCmd)
+	depCmd.AddCommand(depAddCmd, depRemoveCmd, depListCmd, depDependentsCmd)
 	scratchpadCmd.AddCommand(scratchpadGetCmd, scratchpadSetCmd, scratchpadAppendCmd)
-	taskCmd.AddCommand(taskCreateCmd, taskCreateBulkCmd, taskGetCmd, taskListCmd, taskStatusCmd, taskDeleteCmd, depCmd, scratchpadCmd)
+	taskCmd.AddCommand(taskCreateCmd, taskCreateBulkCmd, taskGetCmd, taskListCmd, taskStatusCmd, taskUpdateCmd, taskDeleteCmd, depCmd, scratchpadCmd)
 	rootCmd.AddCommand(taskCmd)
 }

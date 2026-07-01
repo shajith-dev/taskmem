@@ -2,26 +2,25 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"errors"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shajith-dev/taskmem/internal/models"
 )
 
 type TaskRepo struct {
-	pool *pgxpool.Pool
+	db *sql.DB
 }
 
-func NewTaskRepo(pool *pgxpool.Pool) *TaskRepo {
-	return &TaskRepo{pool: pool}
+func NewTaskRepo(db *sql.DB) *TaskRepo {
+	return &TaskRepo{db: db}
 }
 
 func (r *TaskRepo) Create(ctx context.Context, t *models.Task) (*models.Task, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.QueryRowContext(ctx, `
 		INSERT INTO tasks (parent, status, description, scratchpad, model, use_subagent)
-		VALUES ($1, $2, $3, $4, $5, $6)
+		VALUES (?, ?, ?, ?, ?, ?)
 		RETURNING id, parent, status, description, scratchpad, model, use_subagent, created_at, updated_at
 	`, t.Parent, t.Status, t.Description, t.Scratchpad, t.Model, t.UseSubagent)
 
@@ -29,14 +28,14 @@ func (r *TaskRepo) Create(ctx context.Context, t *models.Task) (*models.Task, er
 }
 
 func (r *TaskRepo) GetByID(ctx context.Context, id int64) (*models.Task, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.QueryRowContext(ctx, `
 		SELECT id, parent, status, description, scratchpad, model, use_subagent, created_at, updated_at
-		FROM tasks WHERE id = $1
+		FROM tasks WHERE id = ?
 	`, id)
 
 	t, err := scanTask(row)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
@@ -45,18 +44,18 @@ func (r *TaskRepo) GetByID(ctx context.Context, id int64) (*models.Task, error) 
 }
 
 func (r *TaskRepo) ListByParent(ctx context.Context, parentID *int64) ([]*models.Task, error) {
-	var rows pgx.Rows
+	var rows *sql.Rows
 	var err error
 
 	if parentID == nil {
-		rows, err = r.pool.Query(ctx, `
+		rows, err = r.db.QueryContext(ctx, `
 			SELECT id, parent, status, description, scratchpad, model, use_subagent, created_at, updated_at
 			FROM tasks WHERE parent IS NULL ORDER BY id
 		`)
 	} else {
-		rows, err = r.pool.Query(ctx, `
+		rows, err = r.db.QueryContext(ctx, `
 			SELECT id, parent, status, description, scratchpad, model, use_subagent, created_at, updated_at
-			FROM tasks WHERE parent = $1 ORDER BY id
+			FROM tasks WHERE parent = ? ORDER BY id
 		`, *parentID)
 	}
 	if err != nil {
@@ -68,29 +67,26 @@ func (r *TaskRepo) ListByParent(ctx context.Context, parentID *int64) ([]*models
 }
 
 func (r *TaskRepo) UpdateStatus(ctx context.Context, id int64, status models.TaskStatus) error {
-	tag, err := r.pool.Exec(ctx, `
-		UPDATE tasks SET status = $1 WHERE id = $2
+	res, err := r.db.ExecContext(ctx, `
+		UPDATE tasks SET status = ?, updated_at = datetime('now') WHERE id = ?
 	`, status, id)
 	if err != nil {
 		return fmt.Errorf("update task status: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return checkAffected(res, "update task status")
 }
 
 func (r *TaskRepo) Update(ctx context.Context, t *models.Task) (*models.Task, error) {
-	row := r.pool.QueryRow(ctx, `
+	row := r.db.QueryRowContext(ctx, `
 		UPDATE tasks
-		SET parent = $1, status = $2, description = $3, scratchpad = $4, model = $5, use_subagent = $6
-		WHERE id = $7
+		SET parent = ?, status = ?, description = ?, scratchpad = ?, model = ?, use_subagent = ?, updated_at = datetime('now')
+		WHERE id = ?
 		RETURNING id, parent, status, description, scratchpad, model, use_subagent, created_at, updated_at
 	`, t.Parent, t.Status, t.Description, t.Scratchpad, t.Model, t.UseSubagent, t.ID)
 
 	updated, err := scanTask(row)
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
+		if errors.Is(err, sql.ErrNoRows) {
 			return nil, ErrNotFound
 		}
 		return nil, err
@@ -99,38 +95,28 @@ func (r *TaskRepo) Update(ctx context.Context, t *models.Task) (*models.Task, er
 }
 
 func (r *TaskRepo) BulkCreate(ctx context.Context, tasks []*models.Task) ([]*models.Task, error) {
-	tx, err := r.pool.Begin(ctx)
+	tx, err := r.db.BeginTx(ctx, nil)
 	if err != nil {
 		return nil, fmt.Errorf("begin bulk create tx: %w", err)
 	}
-	defer tx.Rollback(ctx)
-
-	batch := &pgx.Batch{}
-	for _, t := range tasks {
-		batch.Queue(`
-			INSERT INTO tasks (parent, status, description, scratchpad, model, use_subagent)
-			VALUES ($1, $2, $3, $4, $5, $6)
-			RETURNING id, parent, status, description, scratchpad, model, use_subagent, created_at, updated_at
-		`, t.Parent, t.Status, t.Description, t.Scratchpad, t.Model, t.UseSubagent)
-	}
-
-	br := tx.SendBatch(ctx, batch)
+	defer tx.Rollback()
 
 	var created []*models.Task
-	for range tasks {
-		row := br.QueryRow()
-		t, err := scanTask(row)
+	for _, t := range tasks {
+		row := tx.QueryRowContext(ctx, `
+			INSERT INTO tasks (parent, status, description, scratchpad, model, use_subagent)
+			VALUES (?, ?, ?, ?, ?, ?)
+			RETURNING id, parent, status, description, scratchpad, model, use_subagent, created_at, updated_at
+		`, t.Parent, t.Status, t.Description, t.Scratchpad, t.Model, t.UseSubagent)
+
+		ct, err := scanTask(row)
 		if err != nil {
-			br.Close()
 			return nil, fmt.Errorf("bulk create scan: %w", err)
 		}
-		created = append(created, t)
+		created = append(created, ct)
 	}
 
-	if err := br.Close(); err != nil {
-		return nil, fmt.Errorf("close bulk create batch: %w", err)
-	}
-	if err := tx.Commit(ctx); err != nil {
+	if err := tx.Commit(); err != nil {
 		return nil, fmt.Errorf("commit bulk create: %w", err)
 	}
 
@@ -138,22 +124,29 @@ func (r *TaskRepo) BulkCreate(ctx context.Context, tasks []*models.Task) ([]*mod
 }
 
 func (r *TaskRepo) UpdateScratchpad(ctx context.Context, id int64, scratchpad *string) error {
-	tag, err := r.pool.Exec(ctx, `UPDATE tasks SET scratchpad = $1 WHERE id = $2`, scratchpad, id)
+	res, err := r.db.ExecContext(ctx,
+		`UPDATE tasks SET scratchpad = ?, updated_at = datetime('now') WHERE id = ?`, scratchpad, id)
 	if err != nil {
 		return fmt.Errorf("update task scratchpad: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return checkAffected(res, "update task scratchpad")
 }
 
 func (r *TaskRepo) Delete(ctx context.Context, id int64) error {
-	tag, err := r.pool.Exec(ctx, `DELETE FROM tasks WHERE id = $1`, id)
+	res, err := r.db.ExecContext(ctx, `DELETE FROM tasks WHERE id = ?`, id)
 	if err != nil {
 		return fmt.Errorf("delete task: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
+	return checkAffected(res, "delete task")
+}
+
+// checkAffected returns ErrNotFound when a write matched no rows.
+func checkAffected(res sql.Result, op string) error {
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("%s: %w", op, err)
+	}
+	if n == 0 {
 		return ErrNotFound
 	}
 	return nil
@@ -177,7 +170,7 @@ func scanTask(row scanner) (*models.Task, error) {
 	return t, nil
 }
 
-func collectTasks(rows pgx.Rows) ([]*models.Task, error) {
+func collectTasks(rows *sql.Rows) ([]*models.Task, error) {
 	var tasks []*models.Task
 	for rows.Next() {
 		t := &models.Task{}

@@ -58,4 +58,5 @@ chmod +x "$INSTALL_DIR/$BINARY"
 
 echo ""
 echo "Installed $BINARY $VERSION to $INSTALL_DIR/$BINARY"
-echo "Next: set DATABASE_URL, then run '$BINARY migrate'."
+echo "Ready to use — just run '$BINARY task create \"my first task\"'."
+echo "(An embedded SQLite database is created automatically on first use.)"

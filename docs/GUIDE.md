@@ -2,7 +2,7 @@
 
 `taskmem` is a CLI for **you, an LLM agent**, to track your own work: tasks, their
 status, dependencies, a per-task scratchpad (your working memory), and the code
-files in each task's context. State is stored in PostgreSQL.
+files in each task's context. State is stored in a local embedded SQLite database.
 
 This file is the contract for using the tool. It is consumable by any agent
 runtime (Claude, Cursor, Codex, etc.).
@@ -35,21 +35,20 @@ runtime (Claude, Cursor, Codex, etc.).
   findings, decisions, and progress notes across steps.
 - **Files** — paths attached to a task to record what's in its context.
 
-## Setup (run once, by an operator — not the agent)
+## Setup
 
-The `taskmem` binary is a **client only**; it does not bundle a database. It needs
-a reachable PostgreSQL pointed to by `DATABASE_URL` (your own, a managed instance,
-or the bundled docker-compose for local dev — your choice). One-time setup:
+There is none. `taskmem` bundles an embedded SQLite database; on first use it
+creates the database file (under your user config directory) and applies the
+schema automatically. Just install the binary and run it:
 
 ```bash
-docker compose up -d      # optional: local PostgreSQL for dev (host port 65432)
-cp .env.example .env      # set DATABASE_URL
-go run . migrate          # apply schema
+taskmem task create "my first task"
 ```
 
-As an agent you never touch docker or migrations. You only need `DATABASE_URL`
-set and the schema already migrated, then invoke the CLI (`taskmem ...` or
-`go run . ...` in dev).
+Set `DATABASE_URL` to a file path only if you want the database somewhere
+specific (e.g. `DATABASE_URL=./taskmem.db` for a per-project database). As an
+agent you never touch databases or migrations — just invoke the CLI
+(`taskmem ...` or `go run . ...` in dev).
 
 ---
 
@@ -105,6 +104,16 @@ taskmem --json task status 1 IN_PROGRESS
 taskmem --json task status 1 COMPLETED
 ```
 
+**Update other fields** — only the flags you pass are changed; the rest are kept.
+```bash
+taskmem --json task update 1 --description "Implement auth + refresh"
+taskmem --json task update 1 --model claude-opus-4-8 --subagent
+taskmem --json task update 1 --parent 5        # make it a subtask of 5
+taskmem --json task update 1 --no-parent       # promote to a root task
+```
+Returns the full updated task object. `--parent` and `--no-parent` are mutually
+exclusive; `--status` accepts the same values as `task status`.
+
 **Delete a task** (cascades to its subtasks, dependencies, and file links)
 ```bash
 taskmem --json task delete 1
@@ -126,6 +135,7 @@ returns `{"id":N,"scratchpad":"..."}`. Use `append` to log progress as you go.
 taskmem --json task dep add 3 2       # task 3 depends on task 2
 taskmem --json task dep remove 3 2
 taskmem --json task dep list 3        # what task 3 depends on
+taskmem --json task dep dependents 2  # which tasks depend on task 2
 ```
 Direct circular dependencies are rejected. (Deep transitive cycles are not yet
 fully detected — don't rely on the tool to catch A→B→C→A.)

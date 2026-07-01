@@ -2,24 +2,23 @@ package db
 
 import (
 	"context"
+	"database/sql"
 	"fmt"
 
-	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/shajith-dev/taskmem/internal/models"
 )
 
 type TaskGraphRepo struct {
-	pool *pgxpool.Pool
+	db *sql.DB
 }
 
-func NewTaskGraphRepo(pool *pgxpool.Pool) *TaskGraphRepo {
-	return &TaskGraphRepo{pool: pool}
+func NewTaskGraphRepo(db *sql.DB) *TaskGraphRepo {
+	return &TaskGraphRepo{db: db}
 }
 
 func (r *TaskGraphRepo) AddDependency(ctx context.Context, taskID, dependsOn int64) error {
-	_, err := r.pool.Exec(ctx, `
-		INSERT INTO task_graph (task_id, depends_on) VALUES ($1, $2)
+	_, err := r.db.ExecContext(ctx, `
+		INSERT INTO task_graph (task_id, depends_on) VALUES (?, ?)
 		ON CONFLICT DO NOTHING
 	`, taskID, dependsOn)
 	if err != nil {
@@ -29,22 +28,19 @@ func (r *TaskGraphRepo) AddDependency(ctx context.Context, taskID, dependsOn int
 }
 
 func (r *TaskGraphRepo) RemoveDependency(ctx context.Context, taskID, dependsOn int64) error {
-	tag, err := r.pool.Exec(ctx, `
-		DELETE FROM task_graph WHERE task_id = $1 AND depends_on = $2
+	res, err := r.db.ExecContext(ctx, `
+		DELETE FROM task_graph WHERE task_id = ? AND depends_on = ?
 	`, taskID, dependsOn)
 	if err != nil {
 		return fmt.Errorf("remove dependency: %w", err)
 	}
-	if tag.RowsAffected() == 0 {
-		return ErrNotFound
-	}
-	return nil
+	return checkAffected(res, "remove dependency")
 }
 
 // GetDependencies returns all tasks that taskID depends on.
 func (r *TaskGraphRepo) GetDependencies(ctx context.Context, taskID int64) ([]*models.TaskGraph, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT task_id, depends_on FROM task_graph WHERE task_id = $1
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT task_id, depends_on FROM task_graph WHERE task_id = ?
 	`, taskID)
 	if err != nil {
 		return nil, fmt.Errorf("get dependencies: %w", err)
@@ -56,8 +52,8 @@ func (r *TaskGraphRepo) GetDependencies(ctx context.Context, taskID int64) ([]*m
 
 // GetDependents returns all tasks that depend on taskID.
 func (r *TaskGraphRepo) GetDependents(ctx context.Context, taskID int64) ([]*models.TaskGraph, error) {
-	rows, err := r.pool.Query(ctx, `
-		SELECT task_id, depends_on FROM task_graph WHERE depends_on = $1
+	rows, err := r.db.QueryContext(ctx, `
+		SELECT task_id, depends_on FROM task_graph WHERE depends_on = ?
 	`, taskID)
 	if err != nil {
 		return nil, fmt.Errorf("get dependents: %w", err)
@@ -67,7 +63,7 @@ func (r *TaskGraphRepo) GetDependents(ctx context.Context, taskID int64) ([]*mod
 	return collectTaskGraph(rows)
 }
 
-func collectTaskGraph(rows pgx.Rows) ([]*models.TaskGraph, error) {
+func collectTaskGraph(rows *sql.Rows) ([]*models.TaskGraph, error) {
 	var edges []*models.TaskGraph
 	for rows.Next() {
 		e := &models.TaskGraph{}
